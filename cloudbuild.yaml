@@ -25,6 +25,8 @@ steps:
       - '4Gi'
       - '--cpu'
       - '2'
+      - '--timeout'
+      - '300'
 
 images:
   - 'gcr.io/$PROJECT_ID/emotion-backend'

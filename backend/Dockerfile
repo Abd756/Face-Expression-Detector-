@@ -19,8 +19,8 @@ COPY . /app
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Make port 8000 available to the world outside this container
-EXPOSE 8000
+# Set a default port if the PORT env var is not set (for local testing)
+ENV PORT=8080
 
-# Run uvicorn when the container launches
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run uvicorn when the container launches, binding to the $PORT env var
+CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT}"]
