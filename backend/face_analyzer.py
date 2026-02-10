@@ -2,7 +2,7 @@ import cv2
 import threading
 import queue
 import time
-from deepface import DeepFace
+# Lazy import inside method to speed up startup
 
 class FaceAnalyzer:
     def __init__(self):
@@ -55,6 +55,7 @@ class FaceAnalyzer:
     def analyze_frame_sync(self, frame, session_id="default"):
         """Processes a single frame and returns the smoothed result for a specific session."""
         try:
+            from deepface import DeepFace
             # Backend selection:
             detector_backend = 'mediapipe'
 
