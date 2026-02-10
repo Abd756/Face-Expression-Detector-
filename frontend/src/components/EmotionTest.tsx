@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Camera, StopCircle, RefreshCw, BarChart2, Video } from 'lucide-react';
 
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 type Emotions = {
     [key: string]: number;
@@ -19,43 +19,77 @@ type AnalysisData = {
 export default function EmotionTest() {
     const [isStreaming, setIsStreaming] = useState(false);
     const [data, setData] = useState<AnalysisData | null>(null);
-    const [timestamp, setTimestamp] = useState(Date.now());
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const canvasRef = useRef<HTMLCanvasElement>(null);
 
-    // Start streaming (simply by toggling state to show the img tag)
-    const startCamera = () => {
-        setIsStreaming(true);
-        setTimestamp(Date.now()); // Refresh image cache
+    // Start local camera
+    const startCamera = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            if (videoRef.current) {
+                videoRef.current.srcObject = stream;
+            }
+            setIsStreaming(true);
+        } catch (error) {
+            console.error("Failed to access camera:", error);
+            alert("Could not access camera. Please ensure permissions are granted.");
+        }
     };
 
-    // Stop streaming and call backend to release camera
-    const stopCamera = async () => {
+    // Stop camera and release tracks
+    const stopCamera = () => {
+        if (videoRef.current && videoRef.current.srcObject) {
+            const stream = videoRef.current.srcObject as MediaStream;
+            stream.getTracks().forEach(track => track.stop());
+            videoRef.current.srcObject = null;
+        }
         setIsStreaming(false);
         setData(null);
-        try {
-            await fetch(`${API_BASE_URL}/release_camera`, { method: 'POST' });
-        } catch (error) {
-            console.error("Failed to release camera:", error);
-        }
     };
 
-    // Polling for emotion data
+    // Capture and analyze loop
     useEffect(() => {
         let interval: NodeJS.Timeout;
-        if (isStreaming) {
-            interval = setInterval(async () => {
+        
+        const captureFrame = async () => {
+            if (!isStreaming || !videoRef.current || !canvasRef.current) return;
+
+            const video = videoRef.current;
+            const canvas = canvasRef.current;
+            const context = canvas.getContext('2d');
+
+            if (context && video.videoWidth > 0) {
+                // Match canvas size to video
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                
+                // Draw current frame to canvas
+                context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                // Convert to Base64 (low quality JPEG to save bandwidth)
+                const imageData = canvas.toDataURL('image/jpeg', 0.6);
+
                 try {
-                    const res = await fetch(`${API_BASE_URL}/current_emotion`);
-                    const json = await res.json();
-                    setData(json);
-                } catch (err) {
-                    console.error("Error fetching emotion data", err);
+                    const response = await fetch(`${API_BASE_URL}/analyze`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ image: imageData })
+                    });
+                    const result = await response.json();
+                    setData(result);
+                } catch (error) {
+                    console.error("Analysis request failed:", error);
                 }
-            }, 500); // 2 times per second
+            }
+        };
+
+        if (isStreaming) {
+            interval = setInterval(captureFrame, 500); // Analyze every 500ms
         }
+        
         return () => clearInterval(interval);
     }, [isStreaming]);
 
-    // Ordered list of emotions for consistent UI
     const emotionList = ['happy', 'sad', 'angry', 'neutral', 'surprise', 'fear', 'disgust'];
 
     const getBarColor = (emotion: string) => {
@@ -82,24 +116,27 @@ export default function EmotionTest() {
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 w-full max-w-6xl">
                 
-                {/* Left Column: Video Feed */}
                 <div className="flex flex-col items-center gap-4">
                     <div className="relative w-full aspect-video bg-gray-950 rounded-2xl border border-gray-700 shadow-2xl overflow-hidden flex items-center justify-center group">
-                        {isStreaming ? (
-                            // MJPEG Stream from Python API
-                            <img
-                                src={`${API_BASE_URL}/video_feed?t=${timestamp}`}
-                                alt="Live Analysis Feed"
-                                className="w-full h-full object-cover"
-                            />
-                        ) : (
+                        {/* Hidden canvas for snapshotting */}
+                        <canvas ref={canvasRef} className="hidden" />
+                        
+                        {/* Local Video Element */}
+                        <video
+                            ref={videoRef}
+                            autoPlay
+                            playsInline
+                            muted
+                            className={`w-full h-full object-cover ${isStreaming ? 'block' : 'hidden'}`}
+                        />
+
+                        {!isStreaming && (
                             <div className="text-center p-10 opacity-50">
                                 <Video size={64} className="mx-auto mb-4 text-gray-600" />
                                 <p className="text-xl font-medium text-gray-500">Camera is Offline</p>
                             </div>
                         )}
                         
-                        {/* Status Overlay */}
                         <div className="absolute top-4 left-4 flex items-center gap-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10">
                             <div className={`w-3 h-3 rounded-full ${isStreaming ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
                             <span className="text-xs font-semibold tracking-wider uppercase">
@@ -123,22 +160,21 @@ export default function EmotionTest() {
                                 className="flex items-center gap-2 px-8 py-3 bg-red-600 hover:bg-red-500 text-white rounded-lg font-semibold transition-all shadow-lg shadow-red-900/20 active:scale-95"
                             >
                                 <StopCircle size={20} />
-                                Stop & Release
+                                Stop Camera
                             </button>
                         )}
                     </div>
                 </div>
 
-                {/* Right Column: Analytics */}
                 <div className="bg-gray-800/50 backdrop-blur-sm border border-white/10 rounded-2xl p-6 shadow-xl">
                     <div className="flex items-center justify-between mb-6 border-b border-white/10 pb-4">
                         <div className="flex items-center gap-3">
                             <BarChart2 className="text-blue-400" />
                             <h2 className="text-xl font-bold">Emotion Analysis</h2>
                         </div>
-                        {isStreaming && data && data.detected && (
+                        {isStreaming && (
                             <span className="text-xs text-gray-400 font-mono animate-pulse">
-                                Receiving Data...
+                                {data?.detected ? 'Analyzing...' : 'Waiting for Face...'}
                             </span>
                         )}
                     </div>
@@ -146,15 +182,14 @@ export default function EmotionTest() {
                     {!isStreaming || !data ? (
                         <div className="h-64 flex flex-col items-center justify-center text-gray-500">
                              <RefreshCw className={`mb-3 opacity-50 ${isStreaming ? 'animate-spin' : ''}`} size={32} />
-                             <p>{isStreaming ? "Waiting for face..." : "Start camera to view data"}</p>
+                             <p>{isStreaming ? "Connecting to backend..." : "Start camera to view data"}</p>
                         </div>
                     ) : (
                         <div className="space-y-5">
-                            {/* Dominant Emotion Card */}
                             <div className="bg-black/20 rounded-xl p-4 text-center border border-white/5">
                                 <p className="text-gray-400 text-sm uppercase tracking-widest mb-1">Current Mood</p>
                                 <div className="text-4xl font-extrabold text-white">
-                                    {data.dominant_emotion ? data.dominant_emotion.toUpperCase() : "..."}
+                                    {data.dominant_emotion ? data.dominant_emotion.toUpperCase() : "N/A"}
                                 </div>
                                 {data.detected ? (
                                     <span className="text-green-400 text-sm font-medium">Face Detected</span>
@@ -163,7 +198,6 @@ export default function EmotionTest() {
                                 )}
                             </div>
 
-                            {/* Emotion Bars */}
                             <div className="space-y-3">
                                 {data.emotions && emotionList.map((emo) => {
                                     const score = data.emotions![emo] || 0;

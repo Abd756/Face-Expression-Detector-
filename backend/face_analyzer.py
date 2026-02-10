@@ -36,55 +36,52 @@ class FaceAnalyzer:
         with self.lock:
             return self.latest_result
 
+    def analyze_frame_sync(self, frame):
+        """Processes a single frame and returns the smoothed result immediately."""
+        try:
+            # Backend selection:
+            detector_backend = 'mediapipe'
+
+            results = DeepFace.analyze(
+                img_path=frame, 
+                actions=['emotion'], 
+                detector_backend=detector_backend, 
+                enforce_detection=False,
+                silent=True
+            )
+            
+            # Apply Temporal Smoothing (EMA)
+            if results and len(results) > 0:
+                face = results[0]
+                current_emotions = face['emotion']
+                
+                with self.lock:
+                    if self.smoothed_emotions is None:
+                        self.smoothed_emotions = current_emotions.copy()
+                    else:
+                        alpha = 0.2 
+                        for emotion, score in current_emotions.items():
+                            previous_score = self.smoothed_emotions.get(emotion, 0)
+                            self.smoothed_emotions[emotion] = (score * alpha) + (previous_score * (1 - alpha))
+                    
+                    face['emotion'] = self.smoothed_emotions.copy()
+                    dominant_emotion = max(self.smoothed_emotions, key=self.smoothed_emotions.get)
+                    face['dominant_emotion'] = dominant_emotion
+                    results[0] = face
+            
+            return results
+        except Exception as e:
+            print(f"Analysis Error: {e}")
+            return []
+
     def _worker(self):
+        # Keep worker for background processing if needed, 
+        # but analyze_frame_sync is preferred for API usage.
         while not self.stopped:
             try:
                 frame = self.frame_queue.get(timeout=1)
             except queue.Empty:
                 continue
 
-            try:
-                # Backend selection:
-                # 'retinaface': High accuracy, Slow (Low FPS on CPU)
-                # 'mediapipe': High accuracy, Very Fast (High FPS on CPU)
-                # 'opencv': Low accuracy, Fast
-                detector_backend = 'mediapipe'
-
-                results = DeepFace.analyze(
-                    img_path=frame, 
-                    actions=['emotion'], 
-                    detector_backend=detector_backend, 
-                    enforce_detection=False,
-                    silent=True
-                )
-                
-                # Apply Temporal Smoothing (EMA)
-                if results and len(results) > 0:
-                    face = results[0]
-                    current_emotions = face['emotion']
-                    
-                    if self.smoothed_emotions is None:
-                        # First frame, initialize directly
-                        self.smoothed_emotions = current_emotions.copy()
-                    else:
-                        # Blend current with previous (Alpha = 0.2 means 20% new, 80% old)
-                        # This makes changes smooth, not instant.
-                        alpha = 0.2 
-                        for emotion, score in current_emotions.items():
-                            previous_score = self.smoothed_emotions.get(emotion, 0)
-                            # EMA Formula: New = (Current * alpha) + (Previous * (1 - alpha))
-                            self.smoothed_emotions[emotion] = (score * alpha) + (previous_score * (1 - alpha))
-                    
-                    # Update the result with smoothed values
-                    face['emotion'] = self.smoothed_emotions
-                    
-                    # Recalculate dominant emotion based on smoothed scores
-                    dominant_emotion = max(self.smoothed_emotions, key=self.smoothed_emotions.get)
-                    face['dominant_emotion'] = dominant_emotion
-                    
-                    results[0] = face
-
-                self.result_queue.put(results)
-            except Exception as e:
-                # print(f"Analysis Error: {e}") # Optional: Uncomment for debugging
-                self.result_queue.put([])
+            results = self.analyze_frame_sync(frame)
+            self.result_queue.put(results)
