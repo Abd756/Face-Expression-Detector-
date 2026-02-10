@@ -1,0 +1,31 @@
+steps:
+  # 1. Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/emotion-backend', '.']
+    dir: 'backend'
+
+  # 2. Push the image to Artifact Registry (or Container Registry)
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/emotion-backend']
+
+  # 3. Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'emotion-detector'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/emotion-backend'
+      - '--region'
+      - 'asia-south1' # Nearest to your current time zone (India)
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--memory'
+      - '4Gi' # DeepFace needs at least 4GB, 8GB preferred if possible
+      - '--cpu'
+      - '2'
+
+images:
+  - 'gcr.io/$PROJECT_ID/emotion-backend'

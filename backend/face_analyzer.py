@@ -11,15 +11,20 @@ class FaceAnalyzer:
         self.stopped = False
         self.thread = threading.Thread(target=self._worker, daemon=True)
         self.latest_result = None
-        self.smoothed_emotions = None # Stores the running average of emotion scores
+        self.sessions = {} # Dictionary of {session_id: {"emotions": {}, "last_seen": timestamp}}
         self.lock = threading.Lock()
+        
+        # Cleanup thread
+        self.cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
+        self.cleanup_thread.start()
 
     def start(self):
         self.thread.start()
 
     def stop(self):
         self.stopped = True
-        self.thread.join()
+        if self.thread.is_alive():
+            self.thread.join()
 
     def process_frame(self, frame):
         if not self.frame_queue.full():
@@ -60,6 +65,8 @@ class FaceAnalyzer:
                 enforce_detection=False,
                 silent=True
             )
+            
+            print(f"DeepFace RAW Results: {len(results) if results else 0} faces found")
             
             # Apply Temporal Smoothing (EMA) per session
             if results and len(results) > 0:

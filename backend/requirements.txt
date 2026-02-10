@@ -1,0 +1,9 @@
+fastapi==0.128.5
+uvicorn==0.40.0
+pydantic==2.12.5
+opencv-python-headless==4.11.0.86
+deepface==0.0.98
+tf-keras==2.15.0
+numpy==1.26.4
+mediapipe==0.10.9
+python-multipart==0.0.22

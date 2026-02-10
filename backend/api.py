@@ -54,12 +54,16 @@ async def analyze_frame(data: FrameData):
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
         if frame is None:
+            print("Decoding Error: frame is None")
             raise ValueError("Invalid image data")
+
+        print(f"Frame Received: {frame.shape} | Session: {data.session_id}")
 
         # 2. Analyze with session isolation
         results = analyzer.analyze_frame_sync(frame, session_id=data.session_id)
         
         if results and len(results) > 0:
+            print(f"Face Detected! Emotion: {results[0].get('dominant_emotion')}")
             face = results[0]
             return {
                 "detected": True,
