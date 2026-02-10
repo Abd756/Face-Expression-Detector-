@@ -21,6 +21,12 @@ export default function EmotionTest() {
     const [data, setData] = useState<AnalysisData | null>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const sessionIdRef = useRef<string>('');
+
+    // Initialize individual session ID
+    useEffect(() => {
+        sessionIdRef.current = Math.random().toString(36).substring(2, 15);
+    }, []);
 
     // Start local camera
     const startCamera = async () => {
@@ -49,7 +55,7 @@ export default function EmotionTest() {
 
     // Capture and analyze loop
     useEffect(() => {
-        let interval: NodeJS.Timeout;
+        let timeoutId: NodeJS.Timeout;
         
         const captureFrame = async () => {
             if (!isStreaming || !videoRef.current || !canvasRef.current) return;
@@ -59,35 +65,46 @@ export default function EmotionTest() {
             const context = canvas.getContext('2d');
 
             if (context && video.videoWidth > 0) {
-                // Match canvas size to video
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
-                
-                // Draw current frame to canvas
                 context.drawImage(video, 0, 0, canvas.width, canvas.height);
-                
-                // Convert to Base64 (low quality JPEG to save bandwidth)
                 const imageData = canvas.toDataURL('image/jpeg', 0.6);
 
                 try {
                     const response = await fetch(`${API_BASE_URL}/analyze`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ image: imageData })
+                        body: JSON.stringify({ 
+                            image: imageData,
+                            session_id: sessionIdRef.current 
+                        })
                     });
                     const result = await response.json();
-                    setData(result);
+                    
+                    // Only update data and schedule next if we are STILL streaming
+                    if (isStreaming) {
+                        setData(result);
+                        timeoutId = setTimeout(captureFrame, 200); // Wait 200ms AFTER finished
+                    }
                 } catch (error) {
                     console.error("Analysis request failed:", error);
+                    if (isStreaming) {
+                        timeoutId = setTimeout(captureFrame, 1000); // Retry after 1s on error
+                    }
                 }
+            } else {
+                // Video not ready yet, check again soon
+                timeoutId = setTimeout(captureFrame, 500);
             }
         };
 
         if (isStreaming) {
-            interval = setInterval(captureFrame, 500); // Analyze every 500ms
+            captureFrame(); // Kick off the loop
         }
         
-        return () => clearInterval(interval);
+        return () => {
+            if (timeoutId) clearTimeout(timeoutId);
+        };
     }, [isStreaming]);
 
     const emotionList = ['happy', 'sad', 'angry', 'neutral', 'surprise', 'fear', 'disgust'];

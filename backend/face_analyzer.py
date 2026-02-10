@@ -36,8 +36,19 @@ class FaceAnalyzer:
         with self.lock:
             return self.latest_result
 
-    def analyze_frame_sync(self, frame):
-        """Processes a single frame and returns the smoothed result immediately."""
+    def _cleanup_loop(self):
+        """Removes sessions that haven't been seen for 10 minutes."""
+        while not self.stopped:
+            time.sleep(60) # Check every minute
+            now = time.time()
+            with self.lock:
+                to_delete = [sid for sid, data in self.sessions.items() 
+                             if now - data['last_seen'] > 300] # 300 seconds = 5 minutes
+                for sid in to_delete:
+                    del self.sessions[sid]
+
+    def analyze_frame_sync(self, frame, session_id="default"):
+        """Processes a single frame and returns the smoothed result for a specific session."""
         try:
             # Backend selection:
             detector_backend = 'mediapipe'
@@ -50,22 +61,29 @@ class FaceAnalyzer:
                 silent=True
             )
             
-            # Apply Temporal Smoothing (EMA)
+            # Apply Temporal Smoothing (EMA) per session
             if results and len(results) > 0:
                 face = results[0]
                 current_emotions = face['emotion']
                 
                 with self.lock:
-                    if self.smoothed_emotions is None:
-                        self.smoothed_emotions = current_emotions.copy()
-                    else:
-                        alpha = 0.2 
-                        for emotion, score in current_emotions.items():
-                            previous_score = self.smoothed_emotions.get(emotion, 0)
-                            self.smoothed_emotions[emotion] = (score * alpha) + (previous_score * (1 - alpha))
+                    if session_id not in self.sessions:
+                        self.sessions[session_id] = {
+                            "emotions": current_emotions.copy(),
+                            "last_seen": time.time()
+                        }
                     
-                    face['emotion'] = self.smoothed_emotions.copy()
-                    dominant_emotion = max(self.smoothed_emotions, key=self.smoothed_emotions.get)
+                    session_stats = self.sessions[session_id]
+                    session_stats['last_seen'] = time.time()
+                    smoothed = session_stats['emotions']
+                    
+                    alpha = 0.2 
+                    for emotion, score in current_emotions.items():
+                        previous_score = smoothed.get(emotion, 0)
+                        smoothed[emotion] = (score * alpha) + (previous_score * (1 - alpha))
+                    
+                    face['emotion'] = smoothed.copy()
+                    dominant_emotion = max(smoothed, key=smoothed.get)
                     face['dominant_emotion'] = dominant_emotion
                     results[0] = face
             
@@ -75,13 +93,13 @@ class FaceAnalyzer:
             return []
 
     def _worker(self):
-        # Keep worker for background processing if needed, 
-        # but analyze_frame_sync is preferred for API usage.
+        # The worker queue is no longer the main pathway for the API, 
+        # but kept for compatibility. It uses the "default" session.
         while not self.stopped:
             try:
                 frame = self.frame_queue.get(timeout=1)
             except queue.Empty:
                 continue
 
-            results = self.analyze_frame_sync(frame)
+            results = self.analyze_frame_sync(frame, session_id="default")
             self.result_queue.put(results)

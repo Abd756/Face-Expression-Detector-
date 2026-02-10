@@ -23,6 +23,7 @@ analyzer = None
 
 class FrameData(BaseModel):
     image: str # Base64 encoded image string
+    session_id: str = "default" # Unique ID per user tab
 
 @app.on_event("startup")
 async def startup_event():
@@ -55,8 +56,8 @@ async def analyze_frame(data: FrameData):
         if frame is None:
             raise ValueError("Invalid image data")
 
-        # 2. Analyze
-        results = analyzer.analyze_frame_sync(frame)
+        # 2. Analyze with session isolation
+        results = analyzer.analyze_frame_sync(frame, session_id=data.session_id)
         
         if results and len(results) > 0:
             face = results[0]
