@@ -1,0 +1,37 @@
+1. Data Flow (Frontend → Backend)
+The Request: Every few milliseconds, your frontend captures a frame from the video element, converts it to a Base64 encoded string, and sends a POST request to the /analyze endpoint inside api.py.
+The Translation: The backend receives this string, strips the data header (e.g., data:image/jpeg;base64,...), and uses base64.b64decode + cv2.imdecode to turn it into a standard OpenCV Image (NumPy array) that the AI can understand.
+2. Detection Phase (Finding the Face)
+The Library: We use DeepFace, a powerful wrapper for various face analysis models.
+The Backend: Specifically, we configured it to use the MediaPipe backend for detection.
+Why? MediaPipe is extremely fast and can detect faces in real-time on a CPU, whereas other models like VGG-Face or MTCNN are much heavier.
+3. Sentiment Phase (Analyzing Emotions)
+The Model: DeepFace analyzes the cropped face image using a pre-trained Convolutional Neural Network (CNN). It looks for micro-expressions (shape of eyebrows, curve of lips, eye tension).
+The Output: It calculates probability scores for 7 key emotions:
+Angry, Disgust, Fear, Happy, Sad, Surprise, and Neutral.
+4. Stability Logic (Temporal Smoothing)
+One unique feature in your code is Temporal Smoothing (EMA) found in face_analyzer.py.
+
+The Problem: Raw AI detection can be "jittery"—it might jump from "Neutral" to "Happy" for just one frame because of a shadow, making the UI flicker.
+The Fix: Instead of returning the raw score, the backend remembers the previous frame's emotions for your specific session_id. It blends them:
+20% weight to the New frame.
+80% weight to the Historical data.
+Result: This creates a smooth, professional transition between emotions in the dashboard.
+5. Response Format (Backend → Frontend)
+The API sends back a JSON object like this:
+
+json
+{
+  "detected": true,
+  "dominant_emotion": "happy",
+  "emotions": {
+    "happy": 98.4,
+    "neutral": 1.2,
+    "sad": 0.4, 
+    ...
+  },
+  "region": {"x": 100, "y": 200, "w": 300, "h": 300}
+}
+
+
+

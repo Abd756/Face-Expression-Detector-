@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, StopCircle, RefreshCw, BarChart2, Video } from 'lucide-react';
+import { Camera, StopCircle, RefreshCw, BarChart2, Video, Mic, MicOff, Activity } from 'lucide-react';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -16,30 +16,88 @@ type AnalysisData = {
     region?: any;
 };
 
+type AudioAnalysisData = {
+    success: boolean;
+    fluency: number;
+    long_pauses: number;
+    is_speaking: boolean;
+    vocal_status?: 'fluent' | 'thinking' | 'stalling' | 'freeze';
+    silence_streak?: number;
+    error?: string;
+};
+
 export default function EmotionTest() {
     const [isStreaming, setIsStreaming] = useState(false);
     const [data, setData] = useState<AnalysisData | null>(null);
+    const [audioData, setAudioData] = useState<AudioAnalysisData | null>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const sessionIdRef = useRef<string>('');
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioChunksRef = useRef<Blob[]>([]);
 
     // Initialize individual session ID
     useEffect(() => {
         sessionIdRef.current = Math.random().toString(36).substring(2, 15);
     }, []);
 
-    // Start local camera
+    // Start local camera and audio
     const startCamera = async () => {
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: true,
+                audio: true 
+            });
+            
             if (videoRef.current) {
                 videoRef.current.srcObject = stream;
             }
+
+            // Set up MediaRecorder for Audio
+            const audioStream = new MediaStream(stream.getAudioTracks());
+            const recorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
+            
+            recorder.ondataavailable = (e) => {
+                if (e.data.size > 0) {
+                    audioChunksRef.current.push(e.data);
+                }
+            };
+
+            recorder.onstop = async () => {
+                const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                audioChunksRef.current = [];
+                sendAudioToBackend(blob);
+            };
+
+            mediaRecorderRef.current = recorder;
+            recorder.start();
             setIsStreaming(true);
         } catch (error) {
-            console.error("Failed to access camera:", error);
-            alert("Could not access camera. Please ensure permissions are granted.");
+            console.error("Failed to access media:", error);
+            alert("Could not access camera/mic. Please ensure permissions are granted.");
         }
+    };
+
+    const sendAudioToBackend = async (blob: Blob) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(blob);
+        reader.onloadend = async () => {
+            const base64Audio = reader.result as string;
+            try {
+                const response = await fetch(`${API_BASE_URL}/analyze_audio`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        audio: base64Audio,
+                        session_id: sessionIdRef.current 
+                    })
+                });
+                const result = await response.json();
+                setAudioData(result);
+            } catch (error) {
+                console.error("Audio analysis failed:", error);
+            }
+        };
     };
 
     // Stop camera and release tracks
@@ -49,11 +107,29 @@ export default function EmotionTest() {
             stream.getTracks().forEach(track => track.stop());
             videoRef.current.srcObject = null;
         }
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+            mediaRecorderRef.current.stop();
+        }
         setIsStreaming(false);
         setData(null);
+        setAudioData(null);
     };
 
-    // Capture and analyze loop
+    // Audio capture loop (send every 3 seconds)
+    useEffect(() => {
+        let interval: NodeJS.Timeout;
+        if (isStreaming && mediaRecorderRef.current) {
+            interval = setInterval(() => {
+                if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+                    mediaRecorderRef.current.stop(); // This triggers onstop and sends the blob
+                    mediaRecorderRef.current.start(); // Start new chunk
+                }
+            }, 3000);
+        }
+        return () => clearInterval(interval);
+    }, [isStreaming]);
+
+    // Capture and analyze loop (Video)
     useEffect(() => {
         let timeoutId: NodeJS.Timeout;
         
@@ -81,25 +157,23 @@ export default function EmotionTest() {
                     });
                     const result = await response.json();
                     
-                    // Only update data and schedule next if we are STILL streaming
                     if (isStreaming) {
                         setData(result);
-                        timeoutId = setTimeout(captureFrame, 200); // Wait 200ms AFTER finished
+                        timeoutId = setTimeout(captureFrame, 200);
                     }
                 } catch (error) {
                     console.error("Analysis request failed:", error);
                     if (isStreaming) {
-                        timeoutId = setTimeout(captureFrame, 1000); // Retry after 1s on error
+                        timeoutId = setTimeout(captureFrame, 1000);
                     }
                 }
             } else {
-                // Video not ready yet, check again soon
                 timeoutId = setTimeout(captureFrame, 500);
             }
         };
 
         if (isStreaming) {
-            captureFrame(); // Kick off the loop
+            captureFrame();
         }
         
         return () => {
@@ -123,120 +197,188 @@ export default function EmotionTest() {
     };
 
     return (
-        <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-black text-white p-6">
-            <header className="mb-8 text-center">
-                <h1 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-teal-400">
-                    Real-Time Emotion Monitor
-                </h1>
-                <p className="text-gray-400 mt-2">Powered by DeepFace & MediaPipe</p>
-            </header>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 w-full max-w-6xl">
+        <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-4">
+            <div className="flex flex-col lg:flex-row gap-4 w-full h-[92vh] max-w-[98vw] items-stretch">
                 
-                <div className="flex flex-col items-center gap-4">
-                    <div className="relative w-full aspect-video bg-gray-950 rounded-2xl border border-gray-700 shadow-2xl overflow-hidden flex items-center justify-center group">
-                        {/* Hidden canvas for snapshotting */}
+                {/* Left Column: Video Feed (80% Width) */}
+                <div className="lg:w-[80%] w-full flex flex-col h-full">
+                    <div className="relative flex-1 bg-gray-950 rounded-[2rem] border border-white/5 shadow-2xl overflow-hidden flex items-center justify-center group">
                         <canvas ref={canvasRef} className="hidden" />
-                        
-                        {/* Local Video Element */}
                         <video
                             ref={videoRef}
                             autoPlay
                             playsInline
                             muted
-                            className={`w-full h-full object-cover ${isStreaming ? 'block' : 'hidden'}`}
+                            className={`w-full h-full object-cover shadow-inner ${isStreaming ? 'block' : 'hidden'}`}
                         />
 
                         {!isStreaming && (
-                            <div className="text-center p-10 opacity-50">
-                                <Video size={64} className="mx-auto mb-4 text-gray-600" />
-                                <p className="text-xl font-medium text-gray-500">Camera is Offline</p>
+                            <div className="text-center p-10 opacity-20">
+                                <Video size={100} className="mx-auto mb-6 text-gray-500" />
+                                <p className="text-3xl font-black text-gray-600 tracking-tighter">ENGINE OFFLINE</p>
+                                <p className="text-sm text-gray-700 mt-2 font-bold uppercase tracking-widest">Awaiting initialization...</p>
                             </div>
                         )}
                         
-                        <div className="absolute top-4 left-4 flex items-center gap-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10">
-                            <div className={`w-3 h-3 rounded-full ${isStreaming ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-                            <span className="text-xs font-semibold tracking-wider uppercase">
-                                {isStreaming ? "Live Analysis" : "Offline"}
+                        {/* Status Badge */}
+                        <div className="absolute top-6 left-6 flex items-center gap-2 bg-black/40 backdrop-blur-2xl px-4 py-2 rounded-2xl border border-white/5">
+                            <div className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+                            <span className="text-[9px] font-black tracking-widest uppercase text-white/70">
+                                {isStreaming ? "Live Feed" : "Standby"}
                             </span>
                         </div>
+
+                        {/* Top-Right Confidence Meter (Sleek) */}
+                        {isStreaming && data?.dominant_emotion && data.emotions && (
+                            <div className="absolute top-6 right-6 bg-black/40 backdrop-blur-2xl px-5 py-3 rounded-2xl border border-white/5 flex flex-col items-center">
+                                <span className="text-[8px] font-black text-gray-500 uppercase tracking-widest mb-1">Confidence</span>
+                                <span className="text-2xl font-black text-blue-400">
+                                    {data.emotions[data.dominant_emotion]?.toFixed(0)}%
+                                </span>
+                            </div>
+                        )}
+
+                        {/* Bottom-Left Multi-Modal Status */}
+                        {isStreaming && (
+                            <div className="absolute bottom-6 left-6 flex items-center gap-4 bg-black/40 backdrop-blur-2xl px-5 py-3 rounded-2xl border border-white/5">
+                                <Activity className={`text-blue-500 transition-all ${audioData?.is_speaking ? 'animate-pulse' : 'opacity-20'}`} size={16} />
+                                <div className="h-4 w-[1px] bg-white/10" />
+                                <div className="flex items-center gap-2">
+                                    {audioData?.is_speaking ? <Mic size={16} className="text-green-500" /> : <MicOff size={16} className="text-gray-600" />}
+                                    <span className={`text-[9px] font-black uppercase tracking-widest ${audioData?.is_speaking ? 'text-green-500' : 'text-gray-600'}`}>
+                                        {audioData?.is_speaking ? 'Voice' : 'Silent'}
+                                    </span>
+                                </div>
+                            </div>
+                        )}
                     </div>
 
-                    <div className="flex gap-4">
+                    {/* Bottom Controls */}
+                    <div className="flex justify-center mt-4">
                         {!isStreaming ? (
                             <button
                                 onClick={startCamera}
-                                className="flex items-center gap-2 px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-semibold transition-all shadow-lg shadow-blue-900/20 active:scale-95"
+                                className="px-12 py-5 bg-white text-black hover:bg-gray-200 rounded-full font-black text-sm uppercase tracking-widest transition-all shadow-xl active:scale-95"
                             >
-                                <Camera size={20} />
-                                Start Camera
+                                Start Analysis
                             </button>
                         ) : (
                             <button
                                 onClick={stopCamera}
-                                className="flex items-center gap-2 px-8 py-3 bg-red-600 hover:bg-red-500 text-white rounded-lg font-semibold transition-all shadow-lg shadow-red-900/20 active:scale-95"
+                                className="px-12 py-5 bg-red-600 text-white hover:bg-red-700 rounded-full font-black text-sm uppercase tracking-widest transition-all shadow-xl active:scale-95"
                             >
-                                <StopCircle size={20} />
-                                Stop Camera
+                                End Session
                             </button>
                         )}
                     </div>
                 </div>
 
-                <div className="bg-gray-800/50 backdrop-blur-sm border border-white/10 rounded-2xl p-6 shadow-xl">
-                    <div className="flex items-center justify-between mb-6 border-b border-white/10 pb-4">
-                        <div className="flex items-center gap-3">
-                            <BarChart2 className="text-blue-400" />
-                            <h2 className="text-xl font-bold">Emotion Analysis</h2>
+                {/* Right Column: Features Stack (20% Width) */}
+                <div className="lg:w-[20%] w-full flex flex-col gap-4 overflow-y-auto pr-2">
+                    
+                    {/* Row 1: Facial Sentiment */}
+                    <div className="bg-gray-900/50 backdrop-blur-xl border border-white/5 rounded-3xl p-5 shadow-xl">
+                        <div className="flex items-center gap-2 mb-4 opacity-60">
+                            <BarChart2 size={16} className="text-blue-400" />
+                            <h2 className="text-[10px] font-black uppercase tracking-[0.25em]">Sentiment</h2>
                         </div>
-                        {isStreaming && (
-                            <span className="text-xs text-gray-400 font-mono animate-pulse">
-                                {data?.detected ? 'Analyzing...' : 'Waiting for Face...'}
-                            </span>
+
+                        {!isStreaming || !data ? (
+                            <div className="h-32 flex items-center justify-center text-gray-700">
+                                 <p className="text-[9px] uppercase tracking-widest font-black animate-pulse">Waiting...</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                <div className="text-center py-2 bg-white/5 rounded-2xl">
+                                    <p className="text-[8px] text-blue-400 uppercase tracking-widest mb-1 font-bold">Detected</p>
+                                    <div className="text-2xl font-black text-white tracking-tight">
+                                        {(data && data.dominant_emotion) ? data.dominant_emotion.toUpperCase() : "..." }
+                                    </div>
+                                </div>
+                                <div className="space-y-3">
+                                    {data.emotions && emotionList.slice(0, 5).map((emo) => {
+                                        const score = data.emotions ? data.emotions[emo] : 0;
+                                        const isDominant = emo === data.dominant_emotion;
+                                        return (
+                                            <div key={emo} className="space-y-1">
+                                                <div className="flex justify-between text-[8px] font-black uppercase tracking-widest text-gray-500">
+                                                    <span className={isDominant ? 'text-blue-400' : ''}>{emo}</span>
+                                                    <span>{score?.toFixed(0)}%</span>
+                                                </div>
+                                                <div className="h-1 w-full bg-black rounded-full overflow-hidden">
+                                                    <div
+                                                        className={`h-full rounded-full transition-all duration-500 ${getBarColor(emo)} ${isDominant ? 'opacity-100' : 'opacity-20'}`}
+                                                        style={{ width: `${score}%` }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
                         )}
                     </div>
 
-                    {!isStreaming || !data ? (
-                        <div className="h-64 flex flex-col items-center justify-center text-gray-500">
-                             <RefreshCw className={`mb-3 opacity-50 ${isStreaming ? 'animate-spin' : ''}`} size={32} />
-                             <p>{isStreaming ? "Connecting to backend..." : "Start camera to view data"}</p>
+                    {/* Row 2: Vocal Intel */}
+                    <div className="bg-gray-900/50 backdrop-blur-xl border border-white/5 rounded-3xl p-5 shadow-xl">
+                        <div className="flex items-center gap-2 mb-4 opacity-60">
+                            <Mic size={16} className="text-teal-400" />
+                            <h2 className="text-[10px] font-black uppercase tracking-[0.25em]">Voice Intel</h2>
                         </div>
-                    ) : (
-                        <div className="space-y-5">
-                            <div className="bg-black/20 rounded-xl p-4 text-center border border-white/5">
-                                <p className="text-gray-400 text-sm uppercase tracking-widest mb-1">Current Mood</p>
-                                <div className="text-4xl font-extrabold text-white">
-                                    {data.dominant_emotion ? data.dominant_emotion.toUpperCase() : "N/A"}
-                                </div>
-                                {data.detected ? (
-                                    <span className="text-green-400 text-sm font-medium">Face Detected</span>
-                                ) : (
-                                    <span className="text-red-400 text-sm font-medium">No Face Detected</span>
-                                )}
-                            </div>
 
-                            <div className="space-y-3">
-                                {data.emotions && emotionList.map((emo) => {
-                                    const score = data.emotions![emo] || 0;
-                                    const isDominant = emo === data.dominant_emotion;
-                                    return (
-                                        <div key={emo} className="group">
-                                            <div className="flex justify-between text-xs font-semibold uppercase mb-1 text-gray-400 group-hover:text-white transition-colors">
-                                                <span>{emo}</span>
-                                                <span>{score.toFixed(1)}%</span>
-                                            </div>
-                                            <div className="h-2 w-full bg-gray-700/50 rounded-full overflow-hidden">
-                                                <div
-                                                    className={`h-full rounded-full transition-all duration-300 ease-out ${getBarColor(emo)} ${isDominant ? 'opacity-100 shadow-[0_0_10px_rgba(255,255,255,0.3)]' : 'opacity-70'}`}
-                                                    style={{ width: `${score}%` }}
-                                                />
-                                            </div>
-                                        </div>
-                                    );
-                                })}
+                        {!isStreaming || !audioData ? (
+                            <div className="h-32 flex items-center justify-center text-gray-700">
+                                <Activity size={24} className="animate-pulse opacity-20" />
                             </div>
-                        </div>
-                    )}
+                        ) : (
+                            <div className="space-y-4">
+                                <div className="p-4 bg-gradient-to-br from-teal-500/10 to-blue-500/10 rounded-2xl border border-white/5">
+                                    <p className="text-[8px] text-teal-400 uppercase tracking-widest mb-1 font-black">Fluency</p>
+                                    <div className="text-3xl font-black text-white">
+                                        {audioData ? audioData.fluency : 0}%
+                                    </div>
+                                    <div className="mt-3 h-1 w-full bg-black rounded-full overflow-hidden">
+                                        <div 
+                                            className="h-full bg-teal-400 rounded-full transition-all duration-1000"
+                                            style={{ width: `${(audioData && audioData.fluency) ? audioData.fluency : 0}%` }}
+                                        />
+                                    </div>
+                                </div>
+                                
+                                {/* Real-time Vocal Status Badge */}
+                                <div className={`p-4 rounded-2xl border transition-all duration-500 ${
+                                    audioData.vocal_status === 'freeze' ? 'bg-red-500/10 border-red-500/20' :
+                                    audioData.vocal_status === 'stalling' ? 'bg-orange-500/10 border-orange-500/20' :
+                                    audioData.vocal_status === 'thinking' ? 'bg-yellow-500/10 border-yellow-500/20' :
+                                    'bg-green-500/10 border-green-500/20'
+                                }`}>
+                                    <p className="text-[8px] text-gray-500 uppercase tracking-widest mb-1.5 font-bold text-center">Current Flow</p>
+                                    <div className={`text-[10px] font-black text-center uppercase tracking-widest ${
+                                        audioData.vocal_status === 'freeze' ? 'text-red-500' :
+                                        audioData.vocal_status === 'stalling' ? 'text-orange-400' :
+                                        audioData.vocal_status === 'thinking' ? 'text-yellow-400' :
+                                        'text-green-500'
+                                    }`}>
+                                        {audioData.vocal_status === 'freeze' ? 'Critical Freeze Detected' :
+                                         audioData.vocal_status === 'stalling' ? 'Unusual Pause / Stalling' :
+                                         audioData.vocal_status === 'thinking' ? 'Thinking...' :
+                                         'Great Fluency'}
+                                    </div>
+                                    {audioData.silence_streak && audioData.silence_streak > 1 && (
+                                        <p className="text-[8px] text-gray-600 mt-2 text-center font-bold italic">
+                                            Silence: {audioData.silence_streak}s
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Placeholder for future features */}
+                    <div className="flex-1 border-2 border-dashed border-white/5 rounded-3xl flex items-center justify-center opacity-10">
+                        <p className="text-[8px] font-black uppercase tracking-widest italic">+ Add Module</p>
+                    </div>
+
                 </div>
             </div>
         </div>

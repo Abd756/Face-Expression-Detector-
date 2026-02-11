@@ -5,7 +5,10 @@ import cv2
 import uvicorn
 import numpy as np
 import base64
+import time
 from face_analyzer import FaceAnalyzer
+from audio_analyzer import AudioAnalyzer
+import gc
 
 app = FastAPI()
 
@@ -20,19 +23,26 @@ app.add_middleware(
 
 # Global variables
 analyzer = None
+audio_analyzer = None
 
 class FrameData(BaseModel):
     image: str # Base64 encoded image string
     session_id: str = "default" # Unique ID per user tab
 
+class AudioData(BaseModel):
+    audio: str # Base64 encoded audio blob
+    session_id: str = "default"
+
+class SessionClearRequest(BaseModel):
+    session_id: str
+
 @app.on_event("startup")
 async def startup_event():
-    global analyzer
-    # Initialize Analyzer
+    global analyzer, audio_analyzer
+    # Initialize Analyzers
     analyzer = FaceAnalyzer()
-    # We don't start the thread anymore as we use sync analysis,
-    # but the thread can remain daemon for other background tasks if needed.
-    print("System Started - Waiting for frames...")
+    audio_analyzer = AudioAnalyzer()
+    print("System Started - Waiting for frames and audio...")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -40,6 +50,18 @@ async def shutdown_event():
     if analyzer:
         analyzer.stop()
     print("System Shutdown")
+
+@app.post("/end_session")
+async def end_session(data: SessionClearRequest):
+    global analyzer
+    if analyzer:
+        with analyzer.lock:
+            if data.session_id in analyzer.sessions:
+                del analyzer.sessions[data.session_id]
+                gc.collect() # Force garbage collection to free RAM
+                print(f"Session {data.session_id} deleted from RAM and GC triggered.")
+                return {"success": True, "message": "Session cleared"}
+    return {"success": False, "message": "Session not found"}
 
 @app.post("/analyze")
 async def analyze_frame(data: FrameData):
@@ -77,6 +99,84 @@ async def analyze_frame(data: FrameData):
     except Exception as e:
         print(f"Error processing frame: {e}")
         return {"detected": False, "error": str(e)}
+
+@app.post("/analyze_audio")
+async def analyze_audio(data: AudioData):
+    global analyzer, audio_analyzer
+    if analyzer is None or audio_analyzer is None:
+        raise HTTPException(status_code=500, detail="Analyzers not initialized")
+
+    try:
+        # 1. Process audio blob
+        stats = audio_analyzer.process_audio_blob(data.audio)
+        
+        if stats:
+            # 2. Update session state
+            with analyzer.lock:
+                # Ensure session and critical keys exist (robust against backend restarts)
+                if data.session_id not in analyzer.sessions:
+                    analyzer.sessions[data.session_id] = {
+                        "emotions": {},
+                        "audio_stats": {
+                            "speech_ms": 0, 
+                            "silence_ms": 0, 
+                            "long_pauses": 0,
+                            "current_silence_ms": 0
+                        },
+                        "last_seen": time.time()
+                    }
+                
+                session = analyzer.sessions[data.session_id]
+                session['last_seen'] = time.time()
+                
+                s_stats = session.get('audio_stats', {})
+                # Double-check sub-key existence
+                if 'current_silence_ms' not in s_stats:
+                    s_stats['current_silence_ms'] = 0
+
+                # Logic: If user spoke a significant amount, reset streak to the silence AFTER speech.
+                # If blob was mostly silent/noise, continue the existing streak.
+                SPEECH_THRESHOLD_MS = 100 # Ignore sounds shorter than 100ms as noise
+                
+                if stats.get('speech_ms', 0) > SPEECH_THRESHOLD_MS:
+                    # Significant speech detected - streak is just the silence at the tail end
+                    s_stats['current_silence_ms'] = stats.get('trailing_silence_ms', 0)
+                else:
+                    # Mostly silent blob - add the entire blob's silence to the streak
+                    s_stats['current_silence_ms'] += stats.get('silence_ms', 0)
+
+                s_stats['speech_ms'] += stats.get('speech_ms', 0)
+                s_stats['silence_ms'] += stats.get('silence_ms', 0)
+                s_stats['long_pauses'] += stats.get('long_pauses', 0)
+                
+                # Determine Vocal Status based on current streak
+                streak = s_stats['current_silence_ms']
+                status = "fluent"
+                if streak > 10000:
+                    status = "freeze"
+                elif streak > 5000:
+                    status = "stalling"
+                elif streak > 2000:
+                    status = "thinking"
+
+                # Calculate cumulative fluency
+                total_time = s_stats['speech_ms'] + s_stats['silence_ms']
+                fluency = (s_stats['speech_ms'] / total_time * 100) if total_time > 0 else 100
+                
+                return {
+                    "success": True,
+                    "fluency": round(fluency, 2),
+                    "long_pauses": s_stats['long_pauses'],
+                    "is_speaking": stats['speech_ms'] > 0,
+                    "vocal_status": status,
+                    "silence_streak": round(streak / 1000, 1)
+                }
+        
+        return {"success": False, "error": "Could not analyze audio"}
+
+    except Exception as e:
+        print(f"Error processing audio: {e}")
+        return {"success": False, "error": str(e)}
 
 @app.get("/status")
 async def get_status():

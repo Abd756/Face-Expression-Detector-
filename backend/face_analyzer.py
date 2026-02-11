@@ -11,7 +11,7 @@ class FaceAnalyzer:
         self.stopped = False
         self.thread = threading.Thread(target=self._worker, daemon=True)
         self.latest_result = None
-        self.sessions = {} # Dictionary of {session_id: {"emotions": {}, "last_seen": timestamp}}
+        self.sessions = {} # Dictionary of {session_id: {"emotions": {}, "audio_stats": {"speech_ms": 0, "silence_ms": 0, "long_pauses": 0}, "last_seen": timestamp}}
         self.lock = threading.Lock()
         
         # Cleanup thread
@@ -48,9 +48,11 @@ class FaceAnalyzer:
             now = time.time()
             with self.lock:
                 to_delete = [sid for sid, data in self.sessions.items() 
-                             if now - data['last_seen'] > 300] # 300 seconds = 5 minutes
+                             if now - data['last_seen'] > 120] # 120 seconds = 2 minutes
                 for sid in to_delete:
                     del self.sessions[sid]
+                    import gc
+                    gc.collect()
 
     def analyze_frame_sync(self, frame, session_id="default"):
         """Processes a single frame and returns the smoothed result for a specific session."""
@@ -78,6 +80,7 @@ class FaceAnalyzer:
                     if session_id not in self.sessions:
                         self.sessions[session_id] = {
                             "emotions": current_emotions.copy(),
+                            "audio_stats": {"speech_ms": 0, "silence_ms": 0, "long_pauses": 0},
                             "last_seen": time.time()
                         }
                     
