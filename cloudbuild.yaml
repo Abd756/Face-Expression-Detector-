@@ -28,6 +28,7 @@ steps:
       - '--timeout'
       - '3600'
       - '--cpu-boost'
+      - '--session-affinity'
 
 images:
   - 'gcr.io/$PROJECT_ID/emotion-backend'
