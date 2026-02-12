@@ -20,8 +20,10 @@ COPY . /app
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Set a default port if the PORT env var is not set (for local testing)
+# Set environment variables for performance and to suppress hardware warnings
 ENV PORT=8080
+ENV OMP_NUM_THREADS=1
+ENV TF_CPP_MIN_LOG_LEVEL=2
 
-# Run uvicorn when the container launches, binding to the $PORT env var
-CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT}"]
+# Run uvicorn using the socket_app wrapper (which includes both FastAPI and Socket.io)
+CMD ["sh", "-c", "uvicorn api:socket_app --host 0.0.0.0 --port ${PORT}"]

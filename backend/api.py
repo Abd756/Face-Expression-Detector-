@@ -13,11 +13,15 @@ from face_analyzer import FaceAnalyzer
 from audio_analyzer import AudioAnalyzer
 import gc
 
-# 1. Initialize Socket.io Server
-sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
+# 1. Initialize Socket.io Server with verbose logging for debugging
+sio = socketio.AsyncServer(
+    async_mode='asgi', 
+    cors_allowed_origins='*', # Hardcoded * for now to bypass 403
+    logger=True, 
+    engineio_logger=True,
+    always_connect=True
+)
 app = FastAPI()
-# Wrap FastAPI with Socket.io ASGI app
-socket_app = socketio.ASGIApp(sio, app)
 
 # Enable CORS for frontend development
 app.add_middleware(
@@ -27,6 +31,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Move socket app wrapping here to be cleaner
+socket_app = socketio.ASGIApp(sio, app)
 
 # Global variables
 analyzer = None
