@@ -221,6 +221,7 @@ async def get_status():
 
 # --- Socket.io Handlers ---
 
+
 @sio.event
 async def connect(sid, environ):
     print(f"Client Connected: {sid}")
