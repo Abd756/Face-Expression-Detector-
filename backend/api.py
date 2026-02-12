@@ -85,13 +85,21 @@ async def analyze_frame(data: FrameData):
         results = analyzer.analyze_frame_sync(frame, session_id=data.session_id)
         
         if results and len(results) > 0:
-            print(f"Face Detected! Emotion: {results[0].get('dominant_emotion')}")
             face = results[0]
+            
+            # Unified Confidence Score (0-100)
+            # 50% Gaze, 50% Stability
+            g_score = face.get('gaze_score', 0)
+            s_score = face.get('stability_score', 0)
+            confidence = (g_score * 50) + (s_score * 50)
+            
             return {
                 "detected": True,
                 "dominant_emotion": face.get('dominant_emotion'),
-                "emotions": face.get('emotion'),
-                "region": face.get('region')
+                "emotions": face.get('emotions'),
+                "gaze_score": round(g_score, 2),
+                "stability_score": round(s_score, 2),
+                "confidence_score": round(confidence, 1)
             }
         
         return {"detected": False}
@@ -120,19 +128,29 @@ async def analyze_audio(data: AudioData):
                         "audio_stats": {
                             "speech_ms": 0, 
                             "silence_ms": 0, 
-                            "long_pauses": 0,
                             "current_silence_ms": 0
                         },
+                        "last_head_pos": (0.5, 0.5),
+                        "stability_history": [1.0] * 10,
                         "last_seen": time.time()
                     }
                 
                 session = analyzer.sessions[data.session_id]
                 session['last_seen'] = time.time()
                 
-                s_stats = session.get('audio_stats', {})
-                # Double-check sub-key existence
-                if 'current_silence_ms' not in s_stats:
-                    s_stats['current_silence_ms'] = 0
+                if 'audio_stats' not in session:
+                    session['audio_stats'] = {
+                        "speech_ms": 0, 
+                        "silence_ms": 0, 
+                        "current_silence_ms": 0
+                    }
+                
+                # Robustness for face state (if session was created by audio)
+                if 'stability_history' not in session:
+                    session['stability_history'] = [1.0] * 10
+                    session['last_head_pos'] = (0.5, 0.5)
+                
+                s_stats = session['audio_stats']
 
                 # Logic: If user spoke a significant amount, reset streak to the silence AFTER speech.
                 # If blob was mostly silent/noise, continue the existing streak.
@@ -145,9 +163,8 @@ async def analyze_audio(data: AudioData):
                     # Mostly silent blob - add the entire blob's silence to the streak
                     s_stats['current_silence_ms'] += stats.get('silence_ms', 0)
 
-                s_stats['speech_ms'] += stats.get('speech_ms', 0)
-                s_stats['silence_ms'] += stats.get('silence_ms', 0)
-                s_stats['long_pauses'] += stats.get('long_pauses', 0)
+                s_stats['speech_ms'] = s_stats.get('speech_ms', 0) + stats.get('speech_ms', 0)
+                s_stats['silence_ms'] = s_stats.get('silence_ms', 0) + stats.get('silence_ms', 0)
                 
                 # Determine Vocal Status based on current streak
                 streak = s_stats['current_silence_ms']
@@ -160,14 +177,13 @@ async def analyze_audio(data: AudioData):
                     status = "thinking"
 
                 # Calculate cumulative fluency
-                total_time = s_stats['speech_ms'] + s_stats['silence_ms']
-                fluency = (s_stats['speech_ms'] / total_time * 100) if total_time > 0 else 100
+                total_time = s_stats.get('speech_ms', 0) + s_stats.get('silence_ms', 0)
+                fluency = (s_stats.get('speech_ms', 0) / total_time * 100) if total_time > 0 else 100
                 
                 return {
                     "success": True,
                     "fluency": round(fluency, 2),
-                    "long_pauses": s_stats['long_pauses'],
-                    "is_speaking": stats['speech_ms'] > 0,
+                    "is_speaking": stats.get('speech_ms', 0) > 0,
                     "vocal_status": status,
                     "silence_streak": round(streak / 1000, 1)
                 }

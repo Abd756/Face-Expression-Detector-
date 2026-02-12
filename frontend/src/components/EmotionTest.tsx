@@ -13,13 +13,14 @@ type AnalysisData = {
     detected: boolean;
     dominant_emotion?: string;
     emotions?: Emotions;
-    region?: any;
+    gaze_score?: number;
+    stability_score?: number;
+    confidence_score?: number;
 };
 
 type AudioAnalysisData = {
     success: boolean;
     fluency: number;
-    long_pauses: number;
     is_speaking: boolean;
     vocal_status?: 'fluent' | 'thinking' | 'stalling' | 'freeze';
     silence_streak?: number;
@@ -35,11 +36,45 @@ export default function EmotionTest() {
     const sessionIdRef = useRef<string>('');
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
+    const [mounted, setMounted] = useState(false);
 
     // Initialize individual session ID
     useEffect(() => {
+        setMounted(true);
         sessionIdRef.current = Math.random().toString(36).substring(2, 15);
+        console.log("Session Initialized:", sessionIdRef.current);
     }, []);
+
+    // Helper to notify backend to clear RAM
+    const endSessionBackend = () => {
+        if (!sessionIdRef.current) return;
+        
+        console.log("Ending session on backend:", sessionIdRef.current);
+        const data = JSON.stringify({ session_id: sessionIdRef.current });
+        
+        // Use sendBeacon for more reliable delivery during page close
+        if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+            navigator.sendBeacon(`${API_BASE_URL}/end_session`, new Blob([data], { type: 'application/json' }));
+        } else {
+            fetch(`${API_BASE_URL}/end_session`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: data,
+                keepalive: true
+            }).catch(err => console.error("End session failed:", err));
+        }
+    };
+
+    // Tab close / Refresh cleanup
+    useEffect(() => {
+        const handleBeforeUnload = () => {
+            if (isStreaming) {
+                endSessionBackend();
+            }
+        };
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, [isStreaming]);
 
     // Start local camera and audio
     const startCamera = async () => {
@@ -110,6 +145,13 @@ export default function EmotionTest() {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
             mediaRecorderRef.current.stop();
         }
+
+        // Notify backend and ROTATE session ID for next time
+        endSessionBackend();
+        const oldSession = sessionIdRef.current;
+        sessionIdRef.current = Math.random().toString(36).substring(2, 15);
+        console.log(`Session Reset: ${oldSession} -> ${sessionIdRef.current}`);
+
         setIsStreaming(false);
         setData(null);
         setAudioData(null);
@@ -196,6 +238,8 @@ export default function EmotionTest() {
         }
     };
 
+    if (!mounted) return null;
+
     return (
         <div className="flex flex-col items-center justify-center min-h-screen bg-black text-white p-4">
             <div className="flex flex-col lg:flex-row gap-4 w-full h-[92vh] max-w-[98vw] items-stretch">
@@ -229,12 +273,35 @@ export default function EmotionTest() {
                         </div>
 
                         {/* Top-Right Confidence Meter (Sleek) */}
-                        {isStreaming && data?.dominant_emotion && data.emotions && (
-                            <div className="absolute top-6 right-6 bg-black/40 backdrop-blur-2xl px-5 py-3 rounded-2xl border border-white/5 flex flex-col items-center">
-                                <span className="text-[8px] font-black text-gray-500 uppercase tracking-widest mb-1">Confidence</span>
-                                <span className="text-2xl font-black text-blue-400">
-                                    {data.emotions[data.dominant_emotion]?.toFixed(0)}%
-                                </span>
+                        {isStreaming && data?.detected && (
+                            <div className="absolute top-6 right-6 bg-black/60 backdrop-blur-2xl p-4 rounded-[2rem] border border-white/10 flex flex-col items-center gap-3 w-48 shadow-2xl">
+                                <span className="text-[9px] font-black text-white/40 uppercase tracking-[0.2em]">Confidence</span>
+                                
+                                <div className="relative w-full h-2 bg-white/5 rounded-full overflow-hidden">
+                                    <div 
+                                        className={`absolute inset-0 transition-all duration-700 rounded-full ${
+                                            (data.confidence_score || 0) > 70 ? 'bg-green-400' :
+                                            (data.confidence_score || 0) > 40 ? 'bg-yellow-400' : 'bg-red-500'
+                                        }`}
+                                        style={{ width: `${data.confidence_score || 0}%` }}
+                                    />
+                                    {/* Glass reflection */}
+                                    <div className="absolute top-0 left-0 w-full h-1/2 bg-white/10 skew-x-[-20deg]" />
+                                </div>
+
+                                <div className="flex justify-between w-full px-1">
+                                    <div className="flex flex-col items-center gap-1">
+                                        <div className={`w-1.5 h-1.5 rounded-full ${(data.gaze_score || 0) > 0.6 ? 'bg-green-400 animate-pulse shadow-[0_0_8px_rgba(74,222,128,0.5)]' : 'bg-white/10'}`} />
+                                        <span className="text-[7px] font-bold text-white/30 uppercase">Gaze</span>
+                                    </div>
+                                    <div className="flex flex-col items-center gap-1">
+                                        <div className={`w-1.5 h-1.5 rounded-full ${(data.stability_score || 0) > 0.7 ? 'bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.5)]' : 'bg-white/10'}`} />
+                                        <span className="text-[7px] font-bold text-white/30 uppercase">Steady</span>
+                                    </div>
+                                    <span className="text-xl font-black text-white ml-2">
+                                        {data.confidence_score?.toFixed(0)}%
+                                    </span>
+                                </div>
                             </div>
                         )}
 

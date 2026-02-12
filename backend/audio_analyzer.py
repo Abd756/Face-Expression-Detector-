@@ -48,9 +48,16 @@ class AudioAnalyzer:
             
             total_silence_ms = total_duration_ms - total_speech_ms
             
+            # Calculate trailing silence (silence at the end of the blob)
+            trailing_silence_ms = total_duration_ms
+            if len(speech_timestamps) > 0:
+                last_end_ms = (speech_timestamps[-1]['end'] / self.sampling_rate) * 1000
+                trailing_silence_ms = total_duration_ms - last_end_ms
+
             return {
                 "speech_ms": total_speech_ms,
                 "silence_ms": total_silence_ms,
+                "trailing_silence_ms": max(0, trailing_silence_ms),
                 "duration_ms": total_duration_ms
             }
         except Exception as e:
