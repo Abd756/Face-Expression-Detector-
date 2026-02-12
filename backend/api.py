@@ -3,14 +3,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import cv2
 import uvicorn
-import numpy as np
 import base64
+import numpy as np
 import time
+import anyio
+from typing import Optional
+import socketio
 from face_analyzer import FaceAnalyzer
 from audio_analyzer import AudioAnalyzer
 import gc
 
+# 1. Initialize Socket.io Server
+sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
 app = FastAPI()
+# Wrap FastAPI with Socket.io ASGI app
+socket_app = socketio.ASGIApp(sio, app)
 
 # Enable CORS for frontend development
 app.add_middleware(
@@ -28,10 +35,12 @@ audio_analyzer = None
 class FrameData(BaseModel):
     image: str # Base64 encoded image string
     session_id: str = "default" # Unique ID per user tab
+    room_id: str = None # Optional room for relay
 
 class AudioData(BaseModel):
     audio: str # Base64 encoded audio blob
     session_id: str = "default"
+    room_id: str = None
 
 class SessionClearRequest(BaseModel):
     session_id: str
@@ -81,8 +90,8 @@ async def analyze_frame(data: FrameData):
 
         print(f"Frame Received: {frame.shape} | Session: {data.session_id}")
 
-        # 2. Analyze with session isolation
-        results = analyzer.analyze_frame_sync(frame, session_id=data.session_id)
+        # 2. Analyze with session isolation (OFFLOAD TO THREAD)
+        results = await anyio.to_thread.run_sync(analyzer.analyze_frame_sync, frame, data.session_id)
         
         if results and len(results) > 0:
             face = results[0]
@@ -93,7 +102,7 @@ async def analyze_frame(data: FrameData):
             s_score = face.get('stability_score', 0)
             confidence = (g_score * 50) + (s_score * 50)
             
-            return {
+            results_payload = {
                 "detected": True,
                 "dominant_emotion": face.get('dominant_emotion'),
                 "emotions": face.get('emotions'),
@@ -101,6 +110,12 @@ async def analyze_frame(data: FrameData):
                 "stability_score": round(s_score, 2),
                 "confidence_score": round(confidence, 1)
             }
+
+            # Relay to room if in an interview
+            if data.room_id:
+                await sio.emit('ai_results', results_payload, room=data.room_id)
+            
+            return results_payload
         
         return {"detected": False}
 
@@ -115,8 +130,8 @@ async def analyze_audio(data: AudioData):
         raise HTTPException(status_code=500, detail="Analyzers not initialized")
 
     try:
-        # 1. Process audio blob
-        stats = audio_analyzer.process_audio_blob(data.audio)
+        # 1. Process audio blob (OFFLOAD TO THREAD)
+        stats = await anyio.to_thread.run_sync(audio_analyzer.process_audio_blob, data.audio)
         
         if stats:
             # 2. Update session state
@@ -180,13 +195,19 @@ async def analyze_audio(data: AudioData):
                 total_time = s_stats.get('speech_ms', 0) + s_stats.get('silence_ms', 0)
                 fluency = (s_stats.get('speech_ms', 0) / total_time * 100) if total_time > 0 else 100
                 
-                return {
+                results_payload = {
                     "success": True,
                     "fluency": round(fluency, 2),
                     "is_speaking": stats.get('speech_ms', 0) > 0,
                     "vocal_status": status,
                     "silence_streak": round(streak / 1000, 1)
                 }
+
+                # Relay to room if in an interview
+                if data.room_id:
+                    await sio.emit('vocal_results', results_payload, room=data.room_id)
+                
+                return results_payload
         
         return {"success": False, "error": "Could not analyze audio"}
 
@@ -198,5 +219,58 @@ async def analyze_audio(data: AudioData):
 async def get_status():
     return {"status": "online", "model": "DeepFace (MediaPipe backend)"}
 
+# --- Socket.io Handlers ---
+
+@sio.event
+async def connect(sid, environ):
+    print(f"Client Connected: {sid}")
+
+@sio.on('join_room')
+async def handle_join_room(sid, data):
+    room = data.get('room')
+    if room:
+        await sio.enter_room(sid, room)
+        print(f"Client {sid} joined room: {room}")
+        # Tell others in the room a new user has joined
+        await sio.emit('user_joined', {"sid": sid}, room=room, skip_sid=sid)
+        await sio.emit('room_joined', {"room": room}, room=room)
+
+@sio.event
+async def leave_room(sid, data):
+    room = data.get('room')
+    if room:
+        await sio.leave_room(sid, room)
+        print(f"Client {sid} left room: {room}")
+
+@sio.event
+async def offer(sid, data):
+    # Relay RTC Offer to others in the room
+    room = data.get('room')
+    print(f"Relaying Offer for room: {room}")
+    await sio.emit('offer', data, room=room, skip_sid=sid)
+
+@sio.event
+async def answer(sid, data):
+    # Relay RTC Answer to others in the room
+    room = data.get('room')
+    print(f"Relaying Answer for room: {room}")
+    await sio.emit('answer', data, room=room, skip_sid=sid)
+
+@sio.event
+async def ice_candidate(sid, data):
+    # Relay ICE Candidate to others in the room
+    room = data.get('room')
+    await sio.emit('ice_candidate', data, room=room, skip_sid=sid)
+
+@sio.event
+async def terminate_room(sid, data):
+    room = data.get('room')
+    print(f"Room Terminated by Interviewer: {room}")
+    await sio.emit('room_terminated', {"room": room}, room=room)
+
+@sio.event
+async def disconnect(sid):
+    print(f"Client Disconnected: {sid}")
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(socket_app, host="0.0.0.0", port=8000)
