@@ -15,6 +15,8 @@ export default function InterviewerPage() {
         vocalStatus: 'fluent'
     });
     const [secondsElapsed, setSecondsElapsed] = useState(0);
+    const [isCopied, setIsCopied] = useState(false);
+    const [isEndModalOpen, setIsEndModalOpen] = useState(false);
     
     const { localStream, remoteStream, startCall, socket } = useWebRTC(roomId, true, hasJoined);
     const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -89,23 +91,22 @@ export default function InterviewerPage() {
         if (!roomId) return;
         const url = `${window.location.origin}/candidate?room=${roomId}`;
         navigator.clipboard.writeText(url).then(() => {
-            alert('Invite link copied to clipboard!');
+            setIsCopied(true);
+            setTimeout(() => setIsCopied(false), 2000);
         }).catch(err => {
             console.error('Failed to copy link:', err);
         });
     };
 
     const handleEndInterview = () => {
-        if (confirm('Are you sure you want to end this interview?')) {
-            if (socket) {
-                console.log('Terminating Room:', roomId);
-                socket.emit('terminate_room', { room: roomId });
-            }
-            // Small delay to ensure message is sent
-            setTimeout(() => {
-                window.location.reload();
-            }, 500);
+        if (socket) {
+            console.log('Terminating Room:', roomId);
+            socket.emit('terminate_room', { room: roomId });
         }
+        // Small delay to ensure message is sent
+        setTimeout(() => {
+            window.location.reload();
+        }, 500);
     };
 
     return (
@@ -119,10 +120,15 @@ export default function InterviewerPage() {
                 
                 {hasJoined && (
                     <div className="flex items-center gap-2 bg-white/5 px-4 py-2 rounded-full border border-white/10">
-                        <span className="text-white/40 text-xs font-bold uppercase tracking-wider">Room ID:</span>
-                        <code className="text-blue-400 font-mono font-bold">{roomId}</code>
-                        <button onClick={copyInvite} className="ml-2 hover:text-blue-400 transition-colors">
-                            <Copy size={14} />
+                        <span className="text-white/40 text-xs font-bold uppercase tracking-wider">Invite:</span>
+                        <code className="text-blue-400 font-mono font-bold text-xs">{roomId}</code>
+                        <button 
+                            onClick={copyInvite} 
+                            className={`ml-2 px-3 py-1 rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-2 ${
+                                isCopied ? 'bg-green-500 text-white' : 'hover:bg-white/10 text-white/60'
+                            }`}
+                        >
+                            {isCopied ? 'Copied!' : <><Copy size={12} /> Copy Link</>}
                         </button>
                     </div>
                 )}
@@ -185,7 +191,7 @@ export default function InterviewerPage() {
                                     <p className="font-mono font-bold">{formatTime(secondsElapsed)}</p>
                                 </div>
                                 <button 
-                                    onClick={handleEndInterview}
+                                    onClick={() => setIsEndModalOpen(true)}
                                     className="bg-red-500 hover:bg-red-600 px-8 h-12 rounded-2xl font-black transition-colors"
                                 >
                                     End Interview
@@ -194,6 +200,31 @@ export default function InterviewerPage() {
                         </div>
                     )}
                 </div>
+
+                {/* Confirm End Modal */}
+                {isEndModalOpen && (
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+                        <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setIsEndModalOpen(false)} />
+                        <div className="relative bg-[#0D0D0D] border border-white/10 p-10 rounded-[2.5rem] max-w-sm w-full shadow-2xl animate-in zoom-in-95">
+                            <h3 className="text-2xl font-black mb-4">End Session?</h3>
+                            <p className="text-white/40 text-sm mb-8">This will terminate the room for the candidate and permanently end this interview session.</p>
+                            <div className="flex gap-4">
+                                <button 
+                                    onClick={() => setIsEndModalOpen(false)}
+                                    className="flex-1 bg-white/5 hover:bg-white/10 py-4 rounded-2xl font-bold transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button 
+                                    onClick={handleEndInterview}
+                                    className="flex-1 bg-red-600 hover:bg-red-700 py-4 rounded-2xl font-black transition-colors shadow-lg shadow-red-600/20"
+                                >
+                                    End Now
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* Right Panel: Metrics/Notes Placeholder */}
                 <div className="w-[400px] flex flex-col gap-6">

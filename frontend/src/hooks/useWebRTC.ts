@@ -85,7 +85,7 @@ export const useWebRTC = (roomId: string, isInterviewer: boolean, enabled: boole
         s.on('room_terminated', () => {
             if (enabledRef.current) {
                 console.log('Room terminated by interviewer');
-                alert('The interview session has been ended.');
+                // Use a non-blocking timeout or immediate reload
                 window.location.reload();
             }
         });

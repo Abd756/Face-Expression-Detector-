@@ -244,6 +244,7 @@ function CandidateContent() {
                         <p className="text-white/40 text-xs italic">
                             "Focus on the camera and speak naturally. Your interviewer can see you and will begin shortly."
                         </p>
+                        <p className="text-[10px] text-purple-500/40 mt-2">Session ID: {sessionIdRef.current}</p>
                     </div>
                 </div>
             )}
