@@ -23,7 +23,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Set environment variables for performance and to suppress hardware warnings
 ENV PORT=8080
 ENV OMP_NUM_THREADS=1
-ENV TF_CPP_MIN_LOG_LEVEL=2
+ENV TF_CPP_MIN_LOG_LEVEL=3
+ENV GLOG_logtostderr=0
+ENV GLOG_minloglevel=2
+ENV OPENCV_LOG_LEVEL=ERROR
+ENV PYTHONWARNINGS="ignore"
 
 # Run uvicorn using the socket_app wrapper (which includes both FastAPI and Socket.io)
 CMD ["sh", "-c", "uvicorn api:socket_app --host 0.0.0.0 --port ${PORT}"]

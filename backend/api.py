@@ -88,23 +88,25 @@ async def analyze_frame(data: FrameData):
     try:
         # 1. Decode Base64 string to OpenCV Image
         header, encoded = data.image.split(",", 1) if "," in data.image else (None, data.image)
-        nparr = np.frombuffer(base64.b64decode(encoded), np.uint8)
-        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        try:
+            nparr = np.frombuffer(base64.b64decode(encoded), np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        except Exception as decode_err:
+            print(f"Base64 Decoding Error: {decode_err}")
+            raise ValueError(f"Invalid image format: {decode_err}")
 
         if frame is None:
             print("Decoding Error: frame is None")
-            raise ValueError("Invalid image data")
-
-        print(f"Frame Received: {frame.shape} | Session: {data.session_id}")
+            raise ValueError("Invalid image data: cv2.imdecode failed")
 
         # 2. Analyze with session isolation (OFFLOAD TO THREAD)
+        # Using timeout to prevent thread pile-up if processing hangs
         results = await anyio.to_thread.run_sync(analyzer.analyze_frame_sync, frame, data.session_id)
         
         if results and len(results) > 0:
             face = results[0]
             
             # Unified Confidence Score (0-100)
-            # 50% Gaze, 50% Stability
             g_score = face.get('gaze_score', 0)
             s_score = face.get('stability_score', 0)
             confidence = (g_score * 50) + (s_score * 50)
@@ -120,14 +122,19 @@ async def analyze_frame(data: FrameData):
 
             # Relay to room if in an interview
             if data.room_id:
-                await sio.emit('ai_results', results_payload, room=data.room_id)
+                try:
+                    await sio.emit('ai_results', results_payload, room=data.room_id)
+                except Exception as sio_err:
+                    print(f"Socket.io Relay Error: {sio_err}")
             
             return results_payload
         
         return {"detected": False}
 
     except Exception as e:
-        print(f"Error processing frame: {e}")
+        import traceback
+        print(f"CRITICAL Error processing frame: {e}")
+        traceback.print_exc()
         return {"detected": False, "error": str(e)}
 
 @app.post("/analyze_audio")

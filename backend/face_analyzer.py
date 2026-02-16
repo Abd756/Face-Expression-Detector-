@@ -19,6 +19,12 @@ class FaceAnalyzer:
         
         # Initialize MediaPipe Face Mesh
         import mediapipe as mp
+        import os
+        
+        # Suppress MediaPipe/GLog noise
+        os.environ['GLOG_logtostderr'] = '0'
+        os.environ['GLOG_minloglevel'] = '2'
+        
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(
             static_image_mode=False,
@@ -136,14 +142,18 @@ class FaceAnalyzer:
                     session["last_head_pos"] = curr_pos
 
                 # 2. DeepFace Analysis (Emotions)
-                from deepface import DeepFace
-                emotion_results = DeepFace.analyze(
-                    img_path=frame, 
-                    actions=['emotion'], 
-                    detector_backend='mediapipe', 
-                    enforce_detection=False,
-                    silent=True
-                )
+                try:
+                    from deepface import DeepFace
+                    emotion_results = DeepFace.analyze(
+                        img_path=frame, 
+                        actions=['emotion'], 
+                        detector_backend='mediapipe', 
+                        enforce_detection=False,
+                        silent=True
+                    )
+                except Exception as df_err:
+                    print(f"DeepFace Analysis Error: {df_err}")
+                    emotion_results = []
 
                 if emotion_results and len(emotion_results) > 0:
                     face = emotion_results[0]

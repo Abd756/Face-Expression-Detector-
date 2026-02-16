@@ -7,9 +7,20 @@ import io
 class AudioAnalyzer:
     def __init__(self):
         # Load Silero VAD model
+        import warnings
+        warnings.filterwarnings("ignore")
+        
+        # Disable NNPACK to avoid "Unsupported hardware" spam on cloud CPUs
+        import torch
+        try:
+            torch.backends.nnpack.enabled = False
+        except Exception:
+            pass
+
         # We use torch.hub because it's the safest way to get the latest pre-trained model
         self.model, self.utils = torch.hub.load(repo_or_dir='snakers4/silero-vad',
                                               model='silero_vad',
+                                              trust_repo=True, # Explicitly trust the repo to avoid hub.py warnings
                                               force_reload=False,
                                               onnx=False) # Cloud Run has enough RAM for torch
         (self.get_speech_timestamps, _, self.read_audio, _, _) = self.utils
