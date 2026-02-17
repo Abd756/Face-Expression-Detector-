@@ -1,20 +1,3 @@
-import os
-import sys
-
-# 0. Suppress noisy hardware logs BEFORE any other imports
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.environ['GLOG_logtostderr'] = '0'
-os.environ['GLOG_minloglevel'] = '2'
-os.environ['OPENCV_LOG_LEVEL'] = 'ERROR'
-os.environ['PYTHONWARNINGS'] = 'ignore'
-
-# Disable NNPACK to avoid "Unsupported hardware" spam on cloud CPUs
-try:
-    import torch
-    torch.backends.nnpack.enabled = False
-except Exception:
-    pass
-
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -33,9 +16,9 @@ import gc
 # 1. Initialize Socket.io Server with verbose logging for debugging
 sio = socketio.AsyncServer(
     async_mode='asgi', 
-    cors_allowed_origins='*', 
-    logger=False, 
-    engineio_logger=False,
+    cors_allowed_origins='*', # Hardcoded * for now to bypass 403
+    logger=True, 
+    engineio_logger=True,
     always_connect=True
 )
 app = FastAPI()
